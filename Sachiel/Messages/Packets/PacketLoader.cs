@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -51,28 +52,29 @@ namespace Sachiel.Messages.Packets
         /// <summary>
         ///     Turns a string into a class Type
         /// </summary>
-        private static Type GetType(string v)
+        private static Type GetType(SachielAppDomain.LoadContext context, string v)
         {
+            Debug.Assert(context != null);
             if (Type.GetType(v) != null)
             {
                 return Type.GetType(v);
             }
-            foreach (var a in SachielAppDomain.CurrentDomain.GetAssemblies())
-            foreach (var t in a.GetTypes())
-            {
-                if (t.ToString().Equals(v))
+            foreach (Assembly assembly in SachielAppDomain.CurrentDomain.GetAssemblies(context))
+                foreach (Type type in assembly.GetTypes())
                 {
-                    return t;
+                    if (type.ToString().Equals(v))
+                    {
+                        return type;
+                    }
+                    if (type.FullName != null && type.FullName.Equals(v))
+                    {
+                        return type;
+                    }
+                    if (type.Name.Equals(v))
+                    {
+                        return type;
+                    }
                 }
-                if (t.FullName != null && t.FullName.Equals(v))
-                {
-                    return t;
-                }
-                if (t.Name.Equals(v))
-                {
-                    return t;
-                }
-            }
             return null;
         }
 
@@ -81,9 +83,9 @@ namespace Sachiel.Messages.Packets
         ///     Get each class with a defined SachielEndpoint
         /// </summary>
         /// <returns></returns>
-        private static List<Type> GetTypesWithSachielAttribute()
+        private static List<Type> GetTypesWithSachielAttribute(SachielAppDomain.LoadContext context)
         {
-            return (from assembly in SachielAppDomain.CurrentDomain.GetAssemblies()
+            return (from assembly in SachielAppDomain.CurrentDomain.GetAssemblies(context)
                 from type in assembly.GetTypes()
                 where !string.IsNullOrWhiteSpace(type.GetTypeInfo().GetCustomAttribute<SachielEndpoint>(true)?.Name)
                 select type).ToList();
@@ -95,9 +97,9 @@ namespace Sachiel.Messages.Packets
         ///     Loop over each class with a SachielEndpoint and returns a list
         /// </summary>
         /// <param name="stream"></param>
-        private static List<LoaderModel> FindPackets()
+        private static List<LoaderModel> FindPackets(SachielAppDomain.LoadContext context)
         {
-            var models = GetTypesWithSachielAttribute();
+            var models = GetTypesWithSachielAttribute(context);
             var loaders = (from model in models
                 let sachielInfo = model.GetTypeInfo().GetCustomAttribute<SachielEndpoint>(false)
                 select new LoaderModel
@@ -123,7 +125,8 @@ namespace Sachiel.Messages.Packets
             {
                 model.Add(packet.Type, true);
             }
-            foreach (var type in GetTypesWithSachielHeader())
+            SachielAppDomain.LoadContext context = new SachielAppDomain.LoadContext();
+            foreach (var type in GetTypesWithSachielHeader(context))
             {
                 model.Add(type, true);
             }
@@ -142,7 +145,8 @@ namespace Sachiel.Messages.Packets
             {
                 RuntimeTypeModel.Default.Add(packet.Type, true);
             }
-            foreach (var type in GetTypesWithSachielHeader())
+            SachielAppDomain.LoadContext context = new SachielAppDomain.LoadContext();
+            foreach (var type in GetTypesWithSachielHeader(context))
             {
                 RuntimeTypeModel.Default.Add(type, true);
             }
@@ -171,7 +175,8 @@ namespace Sachiel.Messages.Packets
                 var requestName = Path.Combine(requestPath, $"{packet.Key}.schema");
                 File.WriteAllText(requestName, GetSchemaForType(packet.Value.Type, removePackage));
             }
-            foreach (var type in GetTypesWithSachielHeader())
+            SachielAppDomain.LoadContext context = new SachielAppDomain.LoadContext();
+            foreach (var type in GetTypesWithSachielHeader(context))
             {
                 var endpoint = type.GetTypeInfo().GetCustomAttribute<SachielHeader>(false).Endpoint;
                 var responseName = Path.Combine(responsePath, $"{endpoint}.schema");
@@ -202,9 +207,9 @@ namespace Sachiel.Messages.Packets
         ///     Get each class with a defined SachielEndpoint
         /// </summary>
         /// <returns></returns>
-        private static List<Type> GetTypesWithSachielHeader()
+        private static List<Type> GetTypesWithSachielHeader(SachielAppDomain.LoadContext context)
         {
-            return (from assembly in SachielAppDomain.CurrentDomain.GetAssemblies()
+            return (from assembly in SachielAppDomain.CurrentDomain.GetAssemblies(context)
                 from type in assembly.GetTypes()
                 where type.GetTypeInfo().GetCustomAttributes(typeof(SachielHeader), true).Any()
                 select type).ToList();
@@ -216,18 +221,19 @@ namespace Sachiel.Messages.Packets
         /// <param name="packetBuffer"></param>
         public static void LoadPackets()
         {
-            foreach (var packet in FindPackets())
+            SachielAppDomain.LoadContext context = new SachielAppDomain.LoadContext();
+            foreach (var packet in FindPackets(context))
             {
                 var endpointName = packet.Endpoint;
                 var handlerName = packet.Handler;
                 var expensive = packet.Expensive;
-                var type = GetType(packet.Type);
+                var type = GetType(context, packet.Type);
                 if (type == null)
                 {
                     throw new InvalidCastException(
                         $"\"{packet.Type}\" could not be found as a valid type.");
                 }
-                var handler = GetType(handlerName);
+                var handler = GetType(context, handlerName);
                 if (handler == null)
                 {
                     throw new InvalidCastException(
